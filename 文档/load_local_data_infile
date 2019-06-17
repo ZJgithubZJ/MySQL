@@ -1,0 +1,82 @@
+mysql导入数据load data infile 用法整理：
+有时候我们需要将大量数据批量写入数据库，直接使用程序语言和Sql写入往往很耗时间，其中有一种方案就是使用MySql Load data infile导入文件的形式导入数据，这样可大大缩短数据导入时间。
+假如是从MySql客户端调用，将客户端的文件导入，则需要使用 load local data infile， LOAD DATA INFILE 语句以很高的速度从一个文本文件中读取行到一个表中。文件名必须是一个文字字符串。
+
+1，开启load local data infile.;
+假如是Linux下编译安装，在编译的时候，要加上 ./configure --prefix=/usr/local/mysql --enable-local-infile再make。
+若是其他系统，在配置文件中添加
+add:
+[mysqld]
+local-infile=1
+[mysql]
+local-infile=1
+客户端和服务端都需要重启，对于客户端，也可以在执行的指令中添加 --local-infile=1参数，
+如：mysql --default-character-set=utf8 --local-infile=1 -uroot -pzhangjian -e "load data local infile '$bill_name' ignore into table sdo_bill.$table fields terminated by ',';"
+2, 编码格式注意：
+若包含中文，请保证导入文件、连接字符串、导入表都是UTF-8编码。
+
+3，执行
+load data infile 从一个文本中以很高的速度读入到表中，使用这个命令之前，mysqld进程必须已经在运行，为了安全原因，当读取位于服务器上的资源时，文件必须处于数据库同目录或者可被所有人可读，而且，在服务器主机上你必须要有file权限，
+load data [low_priority] [local] infile 'file_name txt' [replace | ignore]
+into table tbl_name
+[fields
+[terminated by't']
+[OPTIONALLY] enclosed by '']
+[escaped by'\' ]]
+[lines terminated by'n']
+[ignore number lines]
+[(col_name, )]
+1：如果使用 low_priority参数，那mysql会等到没有人读取表的时候再去插入数据： 
+load data low_priority infile "/home/mark/data sql" into table Orders;
+2：如果指定local关键词，则表明从客户机主机读文件，如果没有指定，文件必须位于服务器上。
+3：replace和ignore关键字控制对现有的唯一键记录的重复处理，如果指定replace，新行将代替有相同唯一键值的现有行，如果指定ignore，逃过有唯一键的现有行的重复行的输入，如果两个都不指定，遇到重复行的时候他会报错，且文件的余下部分数据会被忽略。
+4：分隔符：
+（1）：fields关键字指定了文件的分割格式，如果用到这个关键字，mysql剖析器还希望看到下面的选项：
+terminated by 分隔符：意思是以。。。作为分隔符，默认情况是\t，也就是tab字符为分隔符
+enclose by：描述字段的括起字符
+escaped by：描述的转义字符，默认的是反斜杠\。
+（2）lines 关键字指定了每条记录的分隔符默认为'\n'即为换行符
+如果两个字段都指定了那fields必须在lines之前。如果不指定fields关键字缺省值与如果你这样写的相同： fields terminated by'\t' enclosed by ’ '' ‘ escaped by'\\'
+如果你不指定一个lines子句，缺省值与如果你这样写的相同： lines terminated by'\n'
+例如：load data infile "/jiaoben/load.txt" replace into table test fields terminated by ',' lines terminated by '/n';
+分隔符讲的是个什么东西嘛！网上一个人错，所有人都错了！垃圾！
+（3）当在服务器主机上寻找文件时，服务器使用下列规则：
+（1）如果给出一个绝对路径名，服务器使用该路径名。
+（2）如果给出一个有一个或多个前置部件的相对路径名，服务器相对服务器的数据目录搜索文件。
+（3）如果给出一个没有前置部件的一个文件名，服务器在当前数据库的数据库目录寻找文件。
+例如： /myfile txt”给出的文件是从服务器的数据目录读取，而作为“myfile txt”给出的一个文件是从当前数据库的数据库目录下读取。
+
+网上的博客都是复制的，且语言并不是那么通顺，到此为止。
+犀牛的线上环境的bill脚本就是采用这种方法导入账单的，脚本实例如下：
+#!/bin/sh
+
+cd /root/log/
+day_time=`date +%s`
+day=`date +"%Y%m%d"`
+day_hour_ago=`date -d "-1 hours" +"%Y%m%d"`
+min=`date +"%M"`
+bill_hour=`date +"%Y_%m_%d_%H"`
+bill_hour_ago=`date -d "-1 hours" +"%Y_%m_%d_%H"`
+for bill in `cat bill.txt`
+do
+table=${bill/-/_}
+if [ $min -eq "00" ];then
+for bill_name in `find /app/sdo/server/bill/ -name "${bill}-bill_${bill_hour_ago}*"`
+do
+mysql --default-character-set=utf8 --local-infile=1 -h10.66.228.115 -uroot -p51__mygj -e "load data local infile '$bill_name' ignore into table sdo_bill_$day_hour_ago.$table  fields  terminated by ',';"
+done
+fi
+
+for bill_name in `find /app/sdo/server/bill/ -name "${bill}-bill_${bill_hour}*"`
+do
+mysql --default-character-set=utf8 --local-infile=1 -h10.66.228.115 -uroot -p51__mygj -e "load data local infile '$bill_name' ignore into table sdo_bill_$day.$table  fields  terminated by ',';"
+done
+done
+
+时间变量的定义比较多，思路清晰即可，它分为当前每分钟执行一次和一个小时执行一次的方案，每分钟执行是靠crontab，一小时执行一次是靠if判断去决定的，且需要导入的txt文件就在本地，把本地的bill文件导入到远程mysql中，看起来并不是很复杂，自己组织起来。
+
+
+
+
+坚持不懈！
+2019/3/13 20:58

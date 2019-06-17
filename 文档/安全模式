@@ -1,0 +1,23 @@
+首先是报错：Access denied for user ‘root’@‘localhost’(using password: YES)
+
+此时，如果是云DB，看看当前登录IP是否有登录权限，没有就添加，因为你登录不到云DB的localhost，明白？若是自己搭建的本地mysql，这么处理：
+
+1、关闭mysql进程
+2、进入mysql安装的bin目录
+3、安全模式启动：./mysqld_safe --skip-grant-tables
+这里很大可能会报错：mysqld from pid file /var/lib/mysqld/mysqld.pid ended
+如果报错，修改/etc/my.cnf，把 
+[mysqld_safe] 
+err-log=/var/log/mysqld.log 
+pid-file=/var/lib/run/mysql/mysqld.pid 
+改成 
+[mysqld_safe] 
+err-log=/var/log/mysqld.log 
+pid-file=/var/lib/mysql/mysqld.pid                            #这里变啦
+重新启动进程：./mysqld_safe --skip-grant-tables
+4、此时一般就能通过mysql直接登录了，或者mysql -uroot -p 进入
+5、重新为root用户修改密码，授权。
+
+
+坚持不懈！
+2018/11/26 20:44

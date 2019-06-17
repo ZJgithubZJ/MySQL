@@ -1,0 +1,150 @@
+备份：mysqldump
+备份某个库的某张表数据，其实在备份数据的时候，dump下来的sql文件是包含了表结构信息的。
+mysqldump -uroot -pzhangjian test wzpiku_prize_config > lala.sql
+test库的wzpiku_prize_config表，中间是空格哦，不指定目录默认当前目录的lala.sql文件中，且表的结构以及数据都会被dump下来。
+并且， 当你使用的用户没有锁表权限的时候，他会报错，dump失败，加个参数就好了：--single-transcation
+把lala.sql表导入到test库中：
+mysql -uroot -pzhangjian test < lala.sql
+
+备份整个库的结构以及数据：
+mysqldump -uroot -pzhangjian test > test.sql 
+
+这里在备份整个库的时候，一般我们会在sql备份文件中添加CREATE DATABASE  和 DROP TABLE IF EXISTS 字段，因为大多涉及整库迁移问题，在一个空库中，需要在sql文件中添加这些内容！要注意！
+这里看下备份呢整个库的脚本：
+[root@VM_13_117_centos sql]# cat back.sh
+#!/bin/bash
+for db in `mysql -uroot -pxnhd..mygj -h10.105.13.117 -e 'show databases;' | grep sdo_ | grep -v _bill`        #这里是检索特定字段的库名。
+do
+        mysqldump -uroot -pxnhd..mygj -h10.105.13.117 --single-transaction --add-drop-database --databases ${db} >> all.sql
+        echo "${db} done"
+done
+
+查看表的引擎、index、自增字节码等信息的指令：
+show table status where `name`='accounts';
+
+把整个库的数据导入到库里面去：首先你要有个目标库，没有的话可以自己创建
+mysql -uroot -pzhangjian test < test.sql 
+注意，这里的整个库的话，包含的就是多张表以及他们的数据了。
+
+如果要备份一个地址下的所有库，要加 --all-databases 参数
+同时当你要指定输出编码的时候使用：（导入的时候也要加同样的字段）
+
+mysqldump -uroot -pxnhd..mygj -h10.105.13.117 --all-database --single-transaction >> test.sql
+
+如果想要对一个地址下的所有业务库结构进行迁移，可以把目标库导入到一个sql文件中转移，不需要打包了！脚本如下~
+[root@VM_218_57_centos lingshi]# cat dump.sh
+#!/bin/bash
+
+for db in `cat database`
+do
+        mysqldump -uadmin -pSDO8r0AsKo0A5 -h10.66.185.130 --default-character-set=UTF8 --single-transaction --no-data --add-drop-database --databases ${db} >> all.sql
+        echo ${db} dump done!
+done
+
+若要在导出的时候指定字符集：             --default-character-set=UTF8          
+如果需要数据的话，把 --no-data 参数去掉就行了！
+
+仅仅备份某张表的结构：-d
+mysqldump -uroot -pzhangjian -d dmz_act_basic_2018 sqmlb_prize_config > lala.sql
+打开发现只有表结构信息。
+
+仅备份某张表的数据：-t
+mysqldump -uroot -pzhangjian -t dmz_act_basic_2018 sqmlb_prize_config > lala.sql
+
+仅仅备份某个库的结构：
+mysqldump -uroot -pzhangjian --no-data dmz_act_basic_2018 > lala.sql
+
+把表结构导入到库中：这里的指令肯定已经知道了，但是要清楚，当一个库中没有目标表，我们导入了表结构的sql文件，他就会有表了，但是没有数据，由此可见，很多初始库的创建以及表的创建，都能通过前面测试的库结构的sql文件去完成。
+
+理解：备份整个库，他指的是把这个库里所有表的数据给dump下来，跟库本身是没关系的，dump下来的sql文件中存贮的是所有表的结构，或者数据信息，所以在初始一些库的时候，就要先把库建好，在导入的时候指定库名，或者做循环，很多个库全部用这个表信息。
+
+在把上面这些语句写入到shell中的时候，要事先确定操作用户对本库的操作权限，以防到时候尴尬！
+用户对应的操作权限在mysql库中的user表里，一览无余。
+select * from mysql.user;
+
+把txt文件导入到库中：这里涉及到的东西就比较多了
+
+锁表问题：
+添加参数：
+--single-transaction    
+
+修改root密码问题：
+update user set password=password('123') where user='root' and host='localhost';
+
+用sql语句查询库表大小：
+1、进入information_schema 数据库：先 use information_schema;
+
+所有数据大小：select concat(round(sum(DATA_LENGTH/1024/1024),2),'MB') as data from TABLES;          
+指定数据库大小： select concat(round(sum(data_length/1024/1024),2),'MB') as data from tables where table_schema='home';  例如home库的大小
+查看某个库的某张表的大小：
+例如home库的members表。
+select table_name,table_rows,data_length+index_length, concat(round((data_length+index_length)/1024/1024,2),'MB') data from tables where table_schema='home' and table_name='members';
+---------------------
+
+修改表的结构：
+如果要给students表新增一列birth，使用：
+ALTER TABLE students ADD COLUMN birth VARCHAR(10) NOT NULL;
+要修改birth列，例如把列名改为birthday，类型改为VARCHAR(20)：
+ALTER TABLE students CHANGE COLUMN birth birthday VARCHAR(20) NOT NULL;
+要删除列，使用：
+ALTER TABLE students DROP COLUMN birthday;
+
+为表格添加索引：
+1、添加普通索引
+ALTER TABLE `table_name` ADD INDEX index_name ( `column` )
+alter table accountID005 ADD INDEX (AccountID);
+2、添加主键索引
+ALTER TABLE `table_name` ADD PRIMARY KEY ( `column` )
+3、添加唯一索引 （UNIQUE）
+ALTER TABLE `table_name` ADD UNIQUE ( `column` )
+4、全文索引 （FULLTEXT）
+ALTER TABLE `table_name` ADD FULLTEXT ( `column`)
+5、多列索引
+ALTER TABLE `table_name` ADD INDEX index_name ( `column1`, `column2`, `column3` )
+
+
+查看mysql的最大连接数：
+
+查看：show variables like 'max_connections';
+修改：set global max_connections=1000;
+
+命令： show status;
+命令：show status like '%下面变量%';
+Aborted_clients                由于客户没有正确关闭连接已经死掉，已经放弃的连接数量。
+Aborted_connects            尝试已经失败的MySQL服务器的连接的次数。
+Connections                     试图连接MySQL服务器的次数。
+Created_tmp_tables          当执行语句时，已经被创造了的隐含临时表的数量。
+Delayed_insert_threads     正在使用的延迟插入处理器线程的数量。
+Delayed_writes                用INSERT DELAYED写入的行数。
+Delayed_errors                用INSERT DELAYED写入的发生某些错误(可能重复键值)的行数。
+Flush_commands            执行FLUSH命令的次数。
+Handler_delete                 请求从一张表中删除行的次数。
+Handler_read_first          请求读入表中第一行的次数。
+Handler_read_key           请求数字基于键读行。
+Handler_read_next           请求读入基于一个键的一行的次数。
+Handler_read_rnd           请求读入基于一个固定位置的一行的次数。
+Handler_update              请求更新表中一行的次数。
+Handler_write                 请求向表中插入一行的次数。
+Key_blocks_used            用于关键字缓存的块的数量。
+Key_read_requests         请求从缓存读入一个键值的次数。
+Key_reads                      从磁盘物理读入一个键值的次数。
+Key_write_requests         请求将一个关键字块写入缓存次数。
+Key_writes                      将一个键值块物理写入磁盘的次数。
+Max_used_connections    同时使用的连接的最大数目。
+Not_flushed_key_blocks   在键缓存中已经改变但是还没被清空到磁盘上的键块。
+Not_flushed_delayed_rows      在INSERT DELAY队列中等待写入的行的数量。
+Open_tables                  打开表的数量。
+Open_files                     打开文件的数量。
+Open_streams               打开流的数量(主要用于日志记载）
+Opened_tables              已经打开的表的数量。
+Questions                     发往服务器的查询的数量。
+Slow_queries                要花超过long_query_time时间的查询数量。
+Threads_connected       当前打开的连接的数量。
+Threads_running          不在睡眠的线程数量。
+Uptime                        服务器工作了多少秒。
+
+
+
+坚持不懈！
+2018/8/20 15:22
+

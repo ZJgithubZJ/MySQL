@@ -1,0 +1,91 @@
+在配置读写分离的时候，这里出现了面还没处理掉的问题：
+
+但是，还是把当前的收获整理下吧：
+
+mysql-proxy是一个代理件，也就是我们平时说的中间件，插件。
+
+yum list | grep mysql-proxy
+
+可以看到相关的包~
+
+你可以采用yum安装，也能采用源码包安装~
+
+https://downloads.mysql.com/archives/proxy/  这是gz包的下载地址
+
+
+mv mysql-proxy-0.8.5-linux-glibc2.3-x86-64bit /usr/local/mysql-proxy
+
+cd /usr/local/mysql-proxy
+
+cp share/doc/mysql-proxy/rw-splitting.lua ./lua        #创建读写分离脚本
+cp share/doc/mysql-proxy/admin-sql.lua ./lua           #创建管理脚本
+
+我们在/etc/下创建mysql-proxy.cnf文件
+
+[root@VM-75-64 mysql-proxy]# cat /etc/mysql-proxy.cnf
+[mysql-proxy]
+daemon=true                                                            #以守护进程方式启动
+pid-file=/var/run/mysql-proxy.pid
+log-file=/usr/local/mysql-proxy/logs/mysql-proxy.log
+log-level=debug
+max-open-files=65535
+plugins=proxy                                                            #插件
+user=mysql-proxy
+proxy-address=192.168.75.64:4040                                         
+proxy-backend-addresses=192.168.75.68:3306                                #读写服务器
+proxy-read-only-backend-addresses=192.168.75.118:3306                     #只读服务器
+proxy-lua-script=/usr/local/mysql-proxy/lua/rw-splitting.lua            #读写分离配置文件位置
+admin-address=192.168.75.64:4041
+admin-lua-script=/usr/local/mysql-proxy/lua/admin-sql.lua               #管理脚本
+admin-username='root'
+admin-password='51..dmz'
+
+
+修改读写分离lua脚本：
+if not proxy.global.config.rwsplit then
+        proxy.global.config.rwsplit = {
+                min_idle_connections = 1,//默认为4            
+                max_idle_connections = 1,//默认为8
+
+                is_debug = false
+        }
+end
+
+上面两个min和max，不修改的话，需要达到4个连接数时才会启动读写分离！
+
+启动mysql-proxy服务：
+
+/usr/local/mysql-proxy/bin/mysql-proxy --defaults-file=/etc/mysql-proxy.cnf
+
+
+看到4040端口已经在被监听了！
+
+此时我们尝试登陆：
+[root@VM-75-64 lua]# mysql -uroot -p51..dmz -h192.168.75.64 -P4040                                #注意这里是本机的IP地址，公用的用户名和密码，端口是4040
+ERROR 1105 (HY000): #07000MySQL Proxy Lua script failed to load. Check the error log.
+
+很明显报错了，这里我们看下错误日志：
+
+[root@VM-75-64 logs]# tail -f mysql-proxy.log
+2019-05-23 13:42:12: (critical) network-mysqld-lua.c:234: lua_load_file(/usr/local/mysql-proxy/share/doc/mysql-proxy/rw-splitting.lua           #读写分离配置文件位置) failed: lua-scope.c:241: stat(/usr/local/mysql-proxy/share/doc/mysql-proxy/rw-splitting.lua                #读写分离配置文件位置) failed: No such file or directory (2)
+2019-05-23 13:43:28: (critical) plugin proxy 0.8.5 started
+2019-05-23 13:43:28: (debug) max open file-descriptors = 65535
+2019-05-23 13:43:28: (message) proxy listening on port 192.168.75.64:4040
+2019-05-23 13:43:28: (message) added read/write backend: 192.168.75.68:3306
+2019-05-23 13:43:28: (message) added read-only backend: 192.168.75.118:3306
+2019-05-23 13:43:28: (debug) now running as user: mysql-proxy (487/488)
+2019-05-23 13:43:47: (critical) network-mysqld-lua.c:234: lua_load_file(/usr/local/mysql-proxy/lua/rw-splitting.lua             #读写分离配置文件位置) failed: lua-scope.c:241: stat(/usr/local/mysql-proxy/lua/rw-splitting.lua          #读写分离配置文件位置) failed: No such file or directory (2)
+2019-05-27 14:17:01: (critical) last message repeated 1 times
+2019-05-27 14:17:01: (critical) network-mysqld-lua.c:234: lua_load_file(/usr/local/mysql-proxy/lua/rw-splitting.lua             #读写分离配置文件位置) failed: lua-scope.c:241: stat(/usr/local/mysql-proxy/lua/rw-splitting.lua          #读写分离配置文件位置) failed: No such file or directory (2)
+
+看到这里我们在配置文件里指令的脚本文件不存在？！
+很震惊是不是？
+
+这里我们尝试了修改启动用户，修改目录和文件的所有者和所属组，修改文件的存储位置，但是都没有修复，依旧是报这个错误！！！
+
+谁能告诉我为什么？网上也看到有人出现过这个问题，但是结果好像都没解决！
+
+
+
+坚持不懈！
+2019/5/27 14:21

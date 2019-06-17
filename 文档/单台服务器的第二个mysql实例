@@ -1,0 +1,92 @@
+单台服务器的第二个mysql实例：
+应公司业务要求，在一台已经搭载了mysql5.1的服务器上再部署一个mysql实例
+
+1：原本就有mysql，mysql用户不用创建了
+2：使用之前整理的mysql_install包体，只是不能用脚本了。
+3：这里我们要做的改动就是监听不同的端口，预设成了3307，且启动中指定的各种路径都不同，我们就预设成mysql3307好了
+4：tar -zxvf mysql-5.6.41-linux-glibc2.12-x86_64.tar.gz
+      mv mysql-5.6.41-linux-glibc2.12-x86_64 mysql3307
+      cd mysql3307
+5这里就涉及到一些配置文件的改动了：
+首先初始化：
+./scripts/mysql_install_db --user=mysql  --basedir=/usr/local/mysql3307 --datadir=/usr/local/mysql3307/data
+这里报错了：unknow option --skip-lock
+此时要修改本机原本的/etc/my.cnf配置文件，因为本机的mysql是5.1，版本太低，--skip-lock从5.5就去掉了
+修改/etc/my.cnf，注释掉--skip-lock
+此时初始化完成；
+6：初始化完成后，就会在你指定的/usr/local/mysql3307下生成my.cnf文件，下面就是修改配置文件：
+[mysqld]
+port=3307
+user=mysql
+character-set-server=utf8
+
+basedir=/usr/local/mysql3307
+socket=/var/lib/mysql3307/mysql.sock
+datadir=/usr/local/mysql3307/data
+
+symbolic-links=0
+skip-name-resolve
+max_allowed_packet=1073741824
+max_connect_errors=9999
+max_connections=500
+max_length_for_sort_data=1024
+max_prepared_stmt_count=16382
+max_user_connections=0
+table_open_cache=1024
+myisam_sort_buffer_size=8388608
+net_read_timeout=30
+net_retry_count=10
+net_write_timeout=60
+query_cache_limit=1048576
+query_cache_size=0
+query_cache_type=OFF
+innodb_file_per_table=1
+innodb_log_file_size=256M
+innodb_log_files_in_group=2
+innodb_sort_buffer_size=1048576
+key_buffer_size=32M
+
+[mysqld_safe]
+log-error=/var/log/mysqld3307.log
+pid-file=/usr/local/mysql3307/mysqld3307.pid
+
+以上是3307库的配置文件；
+
+7：启动mysql
+这里到重点了，肯定是有报错的：
+在启动之前，先做好软连接：
+ln -s /usr/local/mysql3307/support-files/mysql.server /usr/bin/mysql.server
+其中mysql.server中的内容也是要动的：
+basedir=/usr/local/mysql3307
+datadir=/usr/local/mysql3307/data
+这里要跟配置文件中的路径相同
+
+第一次启动是报了一个socket的错：Starting MySQL.181227 18:27:34 mysqld_safe Directory '/var/lib/mysql3307' for UNIX socket file don't exists. 
+原因是我们要手动创建socket=/var/lib/mysql3307/mysql.sock这里指定的目录
+cd /var/lib/
+mkdir mysql3307
+
+第二次启动报错：Starting MySQL...The server quit without updating PID file (/usr/local/mysql/data/snsgou.pid).[失败]
+这里花了点时间，后来从mysql3307的错误日志中发现：[ERROR] Can't start server : Bind on unix socket: Permission denied
+这就是权限问题啊，原来上面创建的目录没有给mysql用户权限
+chown -R mysql:mysql /var/lib/mysql3307/
+同时想起来mysql3307的basedir还没有给mysql权限
+cd /usr/local/
+chown -R mysql:mysql mysql3307
+
+第三次！开起来了！
+
+开起来之后，登录也是个费脑经的事，跟着网上的方法试了下：
+mysql -u root --socket=/var/lib/mysql3307/mysql.sock
+能登录就好，因为想到最终是要使用 -hIP 登录的，所以就先给本机的内网IP授权
+grant all on ........
+（其实应该授权外网IP的！！！）
+授权好了，我们就尝试用-h登录
+mysql -uroot -p51..sdo -h10.154.149.102 -P3307
+OK，能登录！但这里必须要-P3307
+指定监听的端口，不同端口对应不同的库！
+
+
+
+坚持不懈！
+2018/12/27 20:47

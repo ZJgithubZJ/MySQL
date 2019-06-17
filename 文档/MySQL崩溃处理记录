@@ -1,0 +1,149 @@
+机房一台机器异常宕机，导致这台真机里的虚拟机因为非法关机出现文件系统损坏的情况，且是svn那台，很紧急，还好能够从镜像启动，进入系统以后，很多程序开不起来了，最突出的就是mysql了~
+
+启动failed~
+日志报错为：
+Hope that's ok; if not, decrease some variables in the equation. Thread pointer: 0x0 Attempting backtrace. You can use the following information to find out where mysqld died. If you see no messages after this, something went terribly wrong... stack_bottom = 0 thread_stack 0x40000 /usr/local/mysql/bin/mysqld(my_print_stacktrace+0x35)[0x8e64b5] /usr/local/mysql/bin/mysqld(handle_fatal_signal+0x41b)[0x652fbb] /lib64/libpthread.so.0(+0xf7e0)[0x7f11c44c77e0] /lib64/libc.so.6(gsignal+0x35)[0x7f11c315d625] /lib64/libc.so.6(abort+0x175)[0x7f11c315ee05] /usr/local/mysql/bin/mysqld[0xa585c5] /usr/local/mysql/bin/mysqld[0xa6c7b4] /usr/local/mysql/bin/mysqld[0xa6cbc7] /usr/local/mysql/bin/mysqld[0xa5bce2] /usr/local/mysql/bin/mysqld[0xa1e2ba] /usr/local/mysql/bin/mysqld[0xa0bf60] /usr/local/mysql/bin/mysqld[0x95a427] /usr/local/mysql/bin/mysqld(_Z24ha_initialize_handlertonP13st_plugin_int+0x48)[0x58f788] /usr/local/mysql/bin/mysqld[0x6e4a36] /usr/local/mysql/bin/mysqld(_Z11plugin_initPiPPci+0xb3e)[0x6e826e] /usr/local/mysql/bin/mysqld[0x582d85] /usr/local/mysql/bin/mysqld(_Z11mysqld_mainiPPc+0x4d8)[0x587d18] /lib64/libc.so.6(__libc_start_main+0xfd)[0x7f11c3149d5d] /usr/local/mysql/bin/mysqld[0x57a019] The manual page at http://dev.mysql.com/doc/mysql/en/crashing.html contains information that should help you find out what is causing the crash. 161108 11:36:46 mysqld_safe mysqld from pid file /usr/local/mysql/var/VM_241_49_centos.pid ended
+
+
+从日志中可以看出是innodb引擎出了问题。日志里提示到 http://dev.mysql.com/doc/refman/5.6/en/forcing-innodb-recovery.html查看强制恢复的方法。在mysql的配置文件my.cnf里找到 [mysqld]字段下，添加 innodb_force_recovery=1：
+
+不过在此之前，使用过安全模式，修改配置文件，甚至重新编译的方式，最后都没成功，所以之类还是先看下前置恢复的方式~
+
+在配置文件中添加字段：
+
+[mysqld]
+innodb_force_recovery = 1
+
+如果innodb_force_recovery = 1不生效，则可尝试2——6几个数字
+然后重启mysql，重启成功。然后使用mysqldump或 pma 导出数据，执行修复操作等。修复完成后，把该参数注释掉，还原默认值0。
+配置文件的参数：innodb_force_recovery
+innodb_force_recovery影响整个InnoDB存储引擎的恢复状况。默认为0，表示当需要恢复时执行所有的恢复操作（即校验数据页/purge undo/insert buffer merge/rolling back&forward），当不能进行有效的恢复操作时，mysql有可能无法启动，并记录错误日志；
+innodb_force_recovery可以设置为1-6,大的数字包含前面所有数字的影响。当设置参数值大于0后，可以对表进行select,create,drop操作,但insert,update或者delete这类操作是不允许的。
+
+这里，直到我把 innodb_force_recovery = 6 的时候，他才给我启动了，好，能启动就是好事！！！
+但这里所有库表都处于只读模式，没法操作~但是备份的话，足够了！！！
+
+1：第一件事就是备份数据：
+
+2：备份完之后就把原库中的数据全部drop掉，当然由于之前有删除过 ib_logfile0、ib_logfile1的情况，所以有些表或者库会提示你不存在，没关系，我们直接去datadir删，一般为 /var/lib/mysql，只保留系统库~
+
+3：删除 ib_logfile0、ib_logfile1、ibdata1 三个文件，这里是记录mysql真实数据和表属性的文件~当然，前提还是要先备份！！！
+
+4：配置 innodb_force_recovery = 0，重启mysql，这里你会发现，mysql会重新创建那三个文件，且能成功启动~
+
+5：将之前备份的业务数据导入到空库中~
+
+这里在备份原始数据和导入的时候，还是遇到不少错误的~
+备份的时候，常规是走脚本循环，导入到一个all.sql中，但是你会发现，当循环中的第一个库备份完毕循环到第二个的时候，他会报连接不到sock的情况~也就是说mysql没启动，这是不科学的~那么，我们尝试一个一个库手动导入，又是OK的，所以这里，会不会是中间需要停顿的问题，于是在循环中间设置了    sleep 5 ，没错，这次可以循环了~很奇怪~
+
+在导入数据的时候，遇到了锁表的情况，也是走循环，同理备份的时候，会不会要手动一个一个库的导入，郁闷~还真是~！~
+
+同时在日志中发现有报错：
+
+检查error log的时候发现大量warnings：
+[Warning] InnoDB Error Table mysql.innodb_index_stats not found
+[Warning] InnoDB Error Table mysql.innodb_table_stats not found
+[Warning] InnoDB Error Table mysql.slave_master_info not found
+[Warning] InnoDB Error Table mysql.slave_relay_log_info not found
+[Warning] InnoDB Error Table mysql.slave_worker_info not found
+
+解决方案：去看看表是不是真的不存在
+use mysql;
+show tables;
+
+看到表是在的，那么能否drop的掉呢？
+drop的时候提示该表不存在，好的，继续下一步~
+
+
+
+
+再执行语句重新创建这几张表~
+
+CREATE TABLE `innodb_table_stats` (
+  `database_name` varchar(64) COLLATE utf8_bin NOT NULL,
+  `table_name` varchar(64) COLLATE utf8_bin NOT NULL,
+  `last_update` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  `n_rows` bigint(20) unsigned NOT NULL,
+  `clustered_index_size` bigint(20) unsigned NOT NULL,
+  `sum_of_other_index_sizes` bigint(20) unsigned NOT NULL,
+  PRIMARY KEY (`database_name`,`table_name`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8 COLLATE=utf8_bin STATS_PERSISTENT=0;
+
+
+CREATE TABLE `innodb_index_stats` (
+  `database_name` varchar(64) COLLATE utf8_bin NOT NULL,
+  `table_name` varchar(64) COLLATE utf8_bin NOT NULL,
+  `index_name` varchar(64) COLLATE utf8_bin NOT NULL,
+  `last_update` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  `stat_name` varchar(64) COLLATE utf8_bin NOT NULL,
+  `stat_value` bigint(20) unsigned NOT NULL,
+  `sample_size` bigint(20) unsigned DEFAULT NULL,
+  `stat_description` varchar(1024) COLLATE utf8_bin NOT NULL,
+  PRIMARY KEY (`database_name`,`table_name`,`index_name`,`stat_name`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8 COLLATE=utf8_bin STATS_PERSISTENT=0;
+
+CREATE TABLE `slave_master_info` (
+  `Number_of_lines` int(10) unsigned NOT NULL COMMENT 'Number of lines in the file.',
+  `Master_log_name` text CHARACTER SET utf8 COLLATE utf8_bin NOT NULL COMMENT 'The name of the master binary log currently being read from the master.',
+  `Master_log_pos` bigint(20) unsigned NOT NULL COMMENT 'The master log position of the last read event.',
+  `Host` char(64) CHARACTER SET utf8 COLLATE utf8_bin NOT NULL DEFAULT '' COMMENT 'The host name of the master.',
+  `User_name` text CHARACTER SET utf8 COLLATE utf8_bin COMMENT 'The user name used to connect to the master.',
+  `User_password` text CHARACTER SET utf8 COLLATE utf8_bin COMMENT 'The password used to connect to the master.',
+  `Port` int(10) unsigned NOT NULL COMMENT 'The network port used to connect to the master.',
+  `Connect_retry` int(10) unsigned NOT NULL COMMENT 'The period (in seconds) that the slave will wait before trying to reconnect to the master.',
+  `Enabled_ssl` tinyint(1) NOT NULL COMMENT 'Indicates whether the server supports SSL connections.',
+  `Ssl_ca` text CHARACTER SET utf8 COLLATE utf8_bin COMMENT 'The file used for the Certificate Authority (CA) certificate.',
+  `Ssl_capath` text CHARACTER SET utf8 COLLATE utf8_bin COMMENT 'The path to the Certificate Authority (CA) certificates.',
+  `Ssl_cert` text CHARACTER SET utf8 COLLATE utf8_bin COMMENT 'The name of the SSL certificate file.',
+  `Ssl_cipher` text CHARACTER SET utf8 COLLATE utf8_bin COMMENT 'The name of the cipher in use for the SSL connection.',
+  `Ssl_key` text CHARACTER SET utf8 COLLATE utf8_bin COMMENT 'The name of the SSL key file.',
+  `Ssl_verify_server_cert` tinyint(1) NOT NULL COMMENT 'Whether to verify the server certificate.',
+  `Heartbeat` float NOT NULL,
+  `Bind` text CHARACTER SET utf8 COLLATE utf8_bin COMMENT 'Displays which interface is employed when connecting to the MySQL server',
+  `Ignored_server_ids` text CHARACTER SET utf8 COLLATE utf8_bin COMMENT 'The number of server IDs to be ignored, followed by the actual server IDs',
+  `Uuid` text CHARACTER SET utf8 COLLATE utf8_bin COMMENT 'The master server uuid.',
+  `Retry_count` bigint(20) unsigned NOT NULL COMMENT 'Number of reconnect attempts, to the master, before giving up.',
+  `Ssl_crl` text CHARACTER SET utf8 COLLATE utf8_bin COMMENT 'The file used for the Certificate Revocation List (CRL)',
+  `Ssl_crlpath` text CHARACTER SET utf8 COLLATE utf8_bin COMMENT 'The path used for Certificate Revocation List (CRL) files',
+  `Enabled_auto_position` tinyint(1) NOT NULL COMMENT 'Indicates whether GTIDs will be used to retrieve events from the master.',
+  PRIMARY KEY (`Host`,`Port`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8 STATS_PERSISTENT=0 COMMENT='Master Information';
+
+
+CREATE TABLE `slave_relay_log_info` (
+  `Number_of_lines` int(10) unsigned NOT NULL COMMENT 'Number of lines in the file or rows in the table. Used to version table definitions.',
+  `Relay_log_name` text CHARACTER SET utf8 COLLATE utf8_bin NOT NULL COMMENT 'The name of the current relay log file.',
+  `Relay_log_pos` bigint(20) unsigned NOT NULL COMMENT 'The relay log position of the last executed event.',
+  `Master_log_name` text CHARACTER SET utf8 COLLATE utf8_bin NOT NULL COMMENT 'The name of the master binary log file from which the events in the relay log file were read.',
+  `Master_log_pos` bigint(20) unsigned NOT NULL COMMENT 'The master log position of the last executed event.',
+  `Sql_delay` int(11) NOT NULL COMMENT 'The number of seconds that the slave must lag behind the master.',
+  `Number_of_workers` int(10) unsigned NOT NULL,
+  `Id` int(10) unsigned NOT NULL COMMENT 'Internal Id that uniquely identifies this record.',
+  PRIMARY KEY (`Id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8 STATS_PERSISTENT=0 COMMENT='Relay Log Information';
+
+
+CREATE TABLE `slave_worker_info` (
+  `Id` int(10) unsigned NOT NULL,
+  `Relay_log_name` text CHARACTER SET utf8 COLLATE utf8_bin NOT NULL,
+  `Relay_log_pos` bigint(20) unsigned NOT NULL,
+  `Master_log_name` text CHARACTER SET utf8 COLLATE utf8_bin NOT NULL,
+  `Master_log_pos` bigint(20) unsigned NOT NULL,
+  `Checkpoint_relay_log_name` text CHARACTER SET utf8 COLLATE utf8_bin NOT NULL,
+  `Checkpoint_relay_log_pos` bigint(20) unsigned NOT NULL,
+  `Checkpoint_master_log_name` text CHARACTER SET utf8 COLLATE utf8_bin NOT NULL,
+  `Checkpoint_master_log_pos` bigint(20) unsigned NOT NULL,
+  `Checkpoint_seqno` int(10) unsigned NOT NULL,
+  `Checkpoint_group_size` int(10) unsigned NOT NULL,
+  `Checkpoint_group_bitmap` blob NOT NULL,
+  PRIMARY KEY (`Id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8 STATS_PERSISTENT=0 COMMENT='Worker Information';
+
+
+嗯，重启mysql进程~发现报错消失了~同时，数据库也能正常工作了~
+
+
+
+
+坚持不懈！
+2019/3/19 16:48
